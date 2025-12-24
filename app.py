@@ -9,6 +9,19 @@ from dotenv import load_dotenv
 import sys
 import io
 import tiktok_uploader
+import socket
+
+# --- NETWORK FIX: Monkeypatch socket to force IPv4 ---
+# Hugging Face Spaces sometimes has broken IPv6 or DNS issues
+_orig_getaddrinfo = socket.getaddrinfo
+
+def _getaddrinfo_ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+    # Force AF_INET (IPv4)
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+socket.getaddrinfo = _getaddrinfo_ipv4_only
+print("DEBUG: Applied IPv4-only socket monkeypatch")
+# -----------------------------------------------------
 
 # --- Database Init ---
 database.init_db()

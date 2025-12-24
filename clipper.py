@@ -11,6 +11,13 @@ from dotenv import load_dotenv
 import numpy as np
 from PIL import Image, ImageFont, ImageDraw
 from proglog import ProgressBarLogger
+import socket
+
+# Force IPv4 locally in this module too just in case
+_orig_getaddrinfo_clipper = socket.getaddrinfo
+def _getaddrinfo_ipv4_clipper(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo_clipper(host, port, socket.AF_INET, type, proto, flags)
+socket.getaddrinfo = _getaddrinfo_ipv4_clipper
 
 # Load environment variables
 load_dotenv()
