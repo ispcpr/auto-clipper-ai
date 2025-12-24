@@ -10,17 +10,44 @@ import sys
 import io
 import tiktok_uploader
 import socket
+import dns.resolver
 
-# --- NETWORK FIX: Monkeypatch socket to force IPv4 ---
-# Hugging Face Spaces sometimes has broken IPv6 or DNS issues
+# --- NUCLEAR NETWORK FIX: Bypass System DNS entirely ---
+# The environment has broken DNS (Errno -5). We manually resolve via Google DNS (8.8.8.8).
 _orig_getaddrinfo = socket.getaddrinfo
 
-def _getaddrinfo_ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
-    # Force AF_INET (IPv4)
-    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+def _getaddrinfo_bypassed(host, port, family=0, type=0, proto=0, flags=0):
+    # Only hijack specific domains if needed, or all. Let's try to be safe.
+    # If it's an IP, skip.
+    try:
+        # Check if already IP
+        socket.inet_aton(host)
+        return _orig_getaddrinfo(host, port, family, type, proto, flags)
+    except:
+        pass
 
-socket.getaddrinfo = _getaddrinfo_ipv4_only
-print("DEBUG: Applied IPv4-only socket monkeypatch")
+    try:
+        # Create a custom resolver pointing to Google/Cloudflare
+        resolver = dns.resolver.Resolver()
+        resolver.nameservers = ['8.8.8.8', '1.1.1.1'] # Google & Cloudflare
+        
+        # Resolve A record (IPv4)
+        response = resolver.resolve(host, 'A')
+        ip_address = response[0].to_text()
+        
+        print(f"DEBUG: Nuclear DNS Resolved {host} -> {ip_address}")
+        
+        # Return in format expected by socket.getaddrinfo
+        # (family, type, proto, canonname, sockaddr)
+        # Using AF_INET hardcoded
+        return [(socket.AF_INET, type, proto, '', (ip_address, port))]
+        
+    except Exception as e:
+        print(f"DEBUG: Nuclear DNS Failed for {host}: {e}. Falling back to system.")
+        return _orig_getaddrinfo(host, port, family, type, proto, flags)
+
+socket.getaddrinfo = _getaddrinfo_bypassed
+print("DEBUG: Applied Nuclear Custom DNS Resolver (8.8.8.8)")
 # -----------------------------------------------------
 
 # --- Database Init ---
