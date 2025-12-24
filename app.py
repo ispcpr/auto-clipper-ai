@@ -55,6 +55,42 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- Authentication ---
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if (st.session_state["username"] == os.getenv("APP_USERNAME")
+            and st.session_state["password"] == os.getenv("APP_PASSWORD")):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+            del st.session_state["username"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.title("🔐 Login Required")
+        st.text_input("Username", key="username")
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        st.button("Login", on_click=password_entered)
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password failure, show input for password.
+        st.title("🔐 Login Required")
+        st.text_input("Username", key="username")
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        st.error("😕 User not known or password incorrect")
+        st.button("Login", on_click=password_entered)
+        return False
+    else:
+        # Password correct.
+        return True
+
+if not check_password():
+    st.stop()
+
 st.title("⚡ Auto Clipper AI (Groq Fast Mode)")
 
 # --- Modern Sidebar ---
