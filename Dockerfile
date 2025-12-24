@@ -1,29 +1,36 @@
-# Use official Python image (full version to avoid DNS/SSL issues in slim)
+# Use official Python image
 FROM python:3.11
 
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies (FFmpeg is required for MoviePy/YT-DLP)
-# ca-certificates is critical for HTTPS
+# Install system dependencies
+# ca-certificates for SSL, ffmpeg for media, dnsutils/ping for debug
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     ca-certificates \
+    dnsutils \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
+# Set up a non-root user with UID 1000 (standard for HF Spaces)
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Set working directory to the user's home/app
+WORKDIR $HOME/app
+
+# Copy requirements and install python dependencies
+# Copying as user to avoid permission issues
+COPY --chown=user requirements.txt .
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Copy the rest of the application code
-COPY . .
+COPY --chown=user . .
 
-# Create directories for downloads and output to avoid permission issues
+# Create directories for downloads and output
 RUN mkdir -p downloads output_clips
 
-# Expose Streamlit port (Hugging Face Spaces defaults to 7860)
+# Expose Streamlit port
 EXPOSE 7860
 
 # Run the application

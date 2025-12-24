@@ -13,6 +13,14 @@ import tiktok_uploader
 # --- Database Init ---
 database.init_db()
 
+# --- DNS Debug (Run once) ---
+try:
+    import socket
+    st.write(f"<!-- DNS Check: {socket.gethostbyname('www.youtube.com')} -->")
+    print(f"DEBUG: Resolved www.youtube.com to {socket.gethostbyname('www.youtube.com')}")
+except Exception as e:
+    print(f"DEBUG: DNS Resolution Failed: {e}")
+
 # --- Logging Setup (Session State) ---
 if 'log_capture' not in st.session_state:
     st.session_state['log_capture'] = []
