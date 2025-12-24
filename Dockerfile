@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     dnsutils \
     iputils-ping \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up a non-root user with UID 1000 (standard for HF Spaces)
