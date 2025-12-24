@@ -1,14 +1,14 @@
-# Use official lightweight Python image
-FROM python:3.11-slim
+# Use official Python image (full version to avoid DNS/SSL issues in slim)
+FROM python:3.11
 
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies (FFmpeg is required for MoviePy/YT-DLP)
+# ca-certificates is critical for HTTPS
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    libsm6 \
-    libxext6 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first to leverage Docker cache
