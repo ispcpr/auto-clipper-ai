@@ -99,6 +99,8 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
         'force_ipv4': True,
         # Improve bot avoidance
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        # Explicitly tell yt-dlp to use nodejs
+        'js_runtimes': ['nodejs', 'node'],
     }
     
     try:
