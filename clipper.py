@@ -99,13 +99,28 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
         'force_ipv4': True,
         # Improve bot avoidance
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        # Explicitly tell yt-dlp to use nodejs/node
+        # Explicitly tell yt-dlp to use nodejs/node (only 'node' key is supported)
         # Format must be a dict: { binary_name: {config} }
         'js_runtimes': {
             'node': {},
-            'nodejs': {},
+        },
+        # Use Android client to bypass bot detection usually stricter on web
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'player_skip': ['webpage', 'configs', 'js'],
+            }
         },
     }
+
+    # Optional Cookies Support (manual bypass)
+    cookies_path = "cookies.txt"
+    if os.path.exists(cookies_path):
+        ydl_opts['cookiefile'] = cookies_path
+        log_msg(logger, f"Using cookies from {cookies_path}")
+    else:
+        # Fallback to cookies from environment variable if needed in future
+        pass
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
