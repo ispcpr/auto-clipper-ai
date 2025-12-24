@@ -104,13 +104,8 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
         'js_runtimes': {
             'node': {},
         },
-        # Use Android client to bypass bot detection usually stricter on web
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web'],
-                'player_skip': ['webpage', 'configs', 'js'],
-            }
-        },
+        # Remove aggressive player_skip and client forcing. 
+        # With cookies, we should let yt-dlp use the default (web) or whatever works best.
     }
 
     # Optional Cookies Support (manual bypass)
