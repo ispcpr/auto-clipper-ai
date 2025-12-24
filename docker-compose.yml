@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  auto-clipper:
+    build: .
+    container_name: auto_clipper_ai
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./downloads:/app/downloads        # Persist downloaded videos
+      - ./output_clips:/app/output_clips  # Persist generated clips
+      - ./database.db:/app/database.db    # Persist SQLite database
+      - ./.env:/app/.env                  # Map environment file
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

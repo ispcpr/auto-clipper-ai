@@ -1,0 +1,8 @@
+.env
+downloads/
+output_clips/
+__pycache__/
+*.mp4
+*.mp3
+*.log
+autoclipper.db

@@ -1,0 +1,11 @@
+streamlit==1.41.1
+moviepy==1.0.3
+yt-dlp>=2024.12.23
+groq==0.18.0
+python-dotenv==1.0.1
+proglog>=0.1.10
+Pillow>=10.2.0
+opencv-python-headless>=4.9.0.80
+numpy<2.0.0
+selenium
+webdriver-manager
