@@ -181,6 +181,25 @@ with st.sidebar:
         st.caption("Configuration")
         target_clip_count = st.slider("Target Clips", 1, 10, 3)
         
+        # --- Cookies Uploader for Bot Bypass ---
+        st.divider()
+        st.caption("🤖 Bot Verification Bypass")
+        uploaded_cookies = st.file_uploader("Upload cookies.txt", type=["txt"], help="Upload cookies.txt from YouTube to bypass 'Sign in' errors.")
+        if uploaded_cookies is not None:
+            # Save to root as cookies.txt
+            with open("cookies.txt", "wb") as f:
+                f.write(uploaded_cookies.getbuffer())
+            st.success("✅ Cookies saved! Restarting...")
+            time.sleep(1)
+            st.rerun()
+
+        if os.path.exists("cookies.txt"):
+            st.info("🍪 Cookies active")
+            if st.button("Delete Cookies"):
+                os.remove("cookies.txt")
+                st.rerun()
+        # ---------------------------------------
+        
         if st.button("↻ Reset Session", use_container_width=True):
             if 'viral_clips' in st.session_state:
                 del st.session_state['viral_clips']
