@@ -330,19 +330,12 @@ if mode == "Analisis Baru":
                         render_bar.progress((i + 1) / len(st.session_state['viral_clips']))
                     
                     # Save Final Result to DB
-                    print("DEBUG: Attempting to save to DB...") # DEBUG
                     try:
                         video_title = os.path.basename(st.session_state['video_path'])
-                        print(f"DEBUG: Saving Video '{video_title}', URL='{youtube_url}'") # DEBUG
-                        
-                        vid_id = database.save_analysis_result(youtube_url, video_title, st.session_state['video_path'], st.session_state['viral_clips'])
-                        print(f"DEBUG: MongoDB/SQLite Save Success! ID={vid_id}") # DEBUG
+                        database.save_analysis_result(youtube_url, video_title, st.session_state['video_path'], st.session_state['viral_clips'])
                         live_logger.info("Saved to History Database.")
-                        
                     except Exception as e:
-                        print(f"DEBUG: DB Save Error: {e}") # DEBUG
                         live_logger.error(f"DB Save Error: {e}")
-                        st.error(f"DB Save Error: {e}") # Show to user
 
                     status.update(label="Rendering Complete!", state="complete", expanded=False)
             
