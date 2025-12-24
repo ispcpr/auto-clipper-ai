@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     dnsutils \
     iputils-ping \
     nodejs \
-    && ln -s /usr/bin/nodejs /usr/bin/node \
+    && ln -sf /usr/bin/nodejs /usr/bin/node \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up a non-root user with UID 1000 (standard for HF Spaces)
