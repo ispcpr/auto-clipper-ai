@@ -6,3 +6,6 @@ __pycache__/
 *.mp3
 *.log
 autoclipper.db
+cookies.txt
+venv/
+.venv/

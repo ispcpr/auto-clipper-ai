@@ -104,8 +104,9 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
         'js_runtimes': {
             'node': {},
         },
-        # Remove aggressive player_skip and client forcing. 
-        # With cookies, we should let yt-dlp use the default (web) or whatever works best.
+        # Enable downloading JS Challenge solvers (PhantomJS/EJS) from GitHub
+        # This fixes "Remote component challenge solver script was skipped"
+        'remote_components': ['ejs:github'],
     }
 
     # Optional Cookies Support (manual bypass)

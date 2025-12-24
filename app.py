@@ -10,44 +10,30 @@ import sys
 import io
 import tiktok_uploader
 import socket
-import dns.resolver
+# import dns.resolver # Disabled for local execution
 
 # --- NUCLEAR NETWORK FIX: Bypass System DNS entirely ---
-# The environment has broken DNS (Errno -5). We manually resolve via Google DNS (8.8.8.8).
-_orig_getaddrinfo = socket.getaddrinfo
-
-def _getaddrinfo_bypassed(host, port, family=0, type=0, proto=0, flags=0):
-    # Only hijack specific domains if needed, or all. Let's try to be safe.
-    # If it's an IP, skip.
-    try:
-        # Check if already IP
-        socket.inet_aton(host)
-        return _orig_getaddrinfo(host, port, family, type, proto, flags)
-    except:
-        pass
-
-    try:
-        # Create a custom resolver pointing to Google/Cloudflare
-        resolver = dns.resolver.Resolver()
-        resolver.nameservers = ['8.8.8.8', '1.1.1.1'] # Google & Cloudflare
-        
-        # Resolve A record (IPv4)
-        response = resolver.resolve(host, 'A')
-        ip_address = response[0].to_text()
-        
-        print(f"DEBUG: Nuclear DNS Resolved {host} -> {ip_address}")
-        
-        # Return in format expected by socket.getaddrinfo
-        # (family, type, proto, canonname, sockaddr)
-        # Using AF_INET hardcoded
-        return [(socket.AF_INET, type, proto, '', (ip_address, port))]
-        
-    except Exception as e:
-        print(f"DEBUG: Nuclear DNS Failed for {host}: {e}. Falling back to system.")
-        return _orig_getaddrinfo(host, port, family, type, proto, flags)
-
-socket.getaddrinfo = _getaddrinfo_bypassed
-print("DEBUG: Applied Nuclear Custom DNS Resolver (8.8.8.8)")
+# Disabled for local execution
+# _orig_getaddrinfo = socket.getaddrinfo
+#
+# def _getaddrinfo_bypassed(host, port, family=0, type=0, proto=0, flags=0):
+#     try:
+#         socket.inet_aton(host)
+#         return _orig_getaddrinfo(host, port, family, type, proto, flags)
+#     except:
+#         pass
+#
+#     try:
+#         resolver = dns.resolver.Resolver()
+#         resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+#         response = resolver.resolve(host, 'A')
+#         ip_address = response[0].to_text()
+#         return [(socket.AF_INET, type, proto, '', (ip_address, port))]
+#     except Exception as e:
+#         return _orig_getaddrinfo(host, port, family, type, proto, flags)
+#
+# socket.getaddrinfo = _getaddrinfo_bypassed
+# print("DEBUG: Applied Nuclear Custom DNS Resolver (SKIPPED FOR LOCAL)")
 # -----------------------------------------------------
 
 # --- Database Init ---
@@ -114,6 +100,7 @@ def check_password():
         
         env_user = os.getenv("APP_USERNAME", "admin")
         env_pwd = os.getenv("APP_PASSWORD", "password")
+        print(f"DEBUG: Expected User='{env_user}', Pass='{env_pwd}'") # Debug print
 
         if user == env_user and pwd == env_pwd:
             st.session_state["password_correct"] = True
@@ -343,12 +330,19 @@ if mode == "Analisis Baru":
                         render_bar.progress((i + 1) / len(st.session_state['viral_clips']))
                     
                     # Save Final Result to DB
+                    print("DEBUG: Attempting to save to DB...") # DEBUG
                     try:
                         video_title = os.path.basename(st.session_state['video_path'])
-                        database.save_analysis_result(youtube_url, video_title, st.session_state['video_path'], st.session_state['viral_clips'])
+                        print(f"DEBUG: Saving Video '{video_title}', URL='{youtube_url}'") # DEBUG
+                        
+                        vid_id = database.save_analysis_result(youtube_url, video_title, st.session_state['video_path'], st.session_state['viral_clips'])
+                        print(f"DEBUG: MongoDB/SQLite Save Success! ID={vid_id}") # DEBUG
                         live_logger.info("Saved to History Database.")
+                        
                     except Exception as e:
+                        print(f"DEBUG: DB Save Error: {e}") # DEBUG
                         live_logger.error(f"DB Save Error: {e}")
+                        st.error(f"DB Save Error: {e}") # Show to user
 
                     status.update(label="Rendering Complete!", state="complete", expanded=False)
             
