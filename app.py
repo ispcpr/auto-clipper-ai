@@ -253,7 +253,7 @@ if mode == "Analisis Baru":
 
                 # 2. Analyze
                 with st.status("🧠 Phase 2: AI Analysis...", expanded=True) as status:
-                    full_text, viral_clips = clipper.process_video_groq(
+                    full_text, viral_clips, transcript_words = clipper.process_video_groq(
                         st.session_state['video_path'], 
                         n_clips=target_clip_count,
                         logger=live_logger
@@ -263,12 +263,42 @@ if mode == "Analisis Baru":
                         status.update(label="Analysis Failed", state="error")
                         st.stop()
                     else:
+                        # Add caption text and transcript words to each clip
+                        for clip in viral_clips:
+                            clip['caption_text'] = clipper.get_caption_text_for_clip(
+                                transcript_words, 
+                                clip['start'], 
+                                clip['end']
+                            )
+                            clip['transcript_words'] = clipper.get_clip_words(
+                                transcript_words, 
+                                clip['start'], 
+                                clip['end']
+                            )
+                        
                         st.success(f"Found {len(viral_clips)} viral candidates!")
                         st.session_state['viral_clips'] = viral_clips
-                        status.update(label="Analysis Complete!", state="complete", expanded=False)
+                        st.session_state['transcript_words'] = transcript_words
+                        
+                        # --- SAVE TO DB IMMEDIATELY ---
+                        try:
+                            v_id, c_ids = database.save_analysis_result(
+                                youtube_url,
+                                st.session_state.get('video_title', 'Untitled'),
+                                st.session_state.get('video_path'),
+                                viral_clips
+                            )
+                            st.session_state['current_video_id'] = v_id
+                            st.session_state['current_clip_ids'] = c_ids
+                            live_logger.info(f"Analysis saved to DB (ID: {v_id}). Starting render...")
+                        except Exception as e:
+                            live_logger.error(f"DB Save Error: {e}")
+                            st.error(f"DB Save Error: {e}")
 
-                # 3. Auto-Render
-                with st.status("⚙️ Phase 3: Auto-Rendering Clips...", expanded=True) as status:
+                        status.update(label="Analysis Complete!", state="complete", expanded=False)
+                
+                # 3. Auto-Render with Subtitles
+                with st.status("⚙️ Phase 3: Rendering Clips with Subtitles...", expanded=True) as status:
                     render_bar = st.progress(0, text="Rendering Clips...")
                     
                     for i, clip in enumerate(st.session_state['viral_clips']):
@@ -284,28 +314,35 @@ if mode == "Analisis Baru":
                             out_name = f"clip_{i+1}_{safe_title[:30]}_{int(time.time())}.mp4"
                             out_path = os.path.join(OUTPUT_DIR, out_name)
                             
+                            # Get transcript words for this clip
+                            t_words = clip.get('transcript_words', [])
+                            
                             final_clip_path = clipper.save_vertical_clip(
                                 video_path, 
                                 clip, 
                                 out_path,
-                                progress_callback=update_clip_progress
+                                progress_callback=update_clip_progress,
+                                transcript_words=t_words
                             )
 
                             clip['file_path'] = final_clip_path
                             live_logger.info(f"Rendered: {final_clip_path}")
                             
+                            # --- UPDATE DB PATH ---
+                            if 'current_clip_ids' in st.session_state:
+                                try:
+                                    c_id = st.session_state['current_clip_ids'][i]
+                                    database.update_clip_path(c_id, final_clip_path)
+                                except Exception as e:
+                                    live_logger.error(f"Failed to update clip path: {e}")
+
                         except Exception as e:
                             live_logger.error(f"Render Error Clip #{i+1}: {e}")
                         
+                        clip_bar.empty()
                         render_bar.progress((i + 1) / len(st.session_state['viral_clips']))
                     
-                    try:
-                        video_title = os.path.basename(st.session_state['video_path'])
-                        database.save_analysis_result(youtube_url, video_title, st.session_state['video_path'], st.session_state['viral_clips'])
-                        live_logger.info("Saved to History Database.")
-                    except Exception as e:
-                        live_logger.error(f"DB Save Error: {e}")
-
+                    st.success("✅ Rendering Complete! All clips saved to History.")
                     status.update(label="Rendering Complete!", state="complete", expanded=False)
             
             st.rerun()
@@ -391,8 +428,36 @@ elif mode == "Riwayat":
                         with c_vid:
                             if clip.get('file_path') and os.path.exists(clip['file_path']):
                                  st.video(clip['file_path'])
-                            else:
+                            elif os.path.exists(item['file_path']):
                                 st.info("Clip not rendered or missing.")
+                                if st.button("🔄 Retry Render", key=f"retry_{clip['id']}", help="Render this clip"):
+                                    retry_bar = st.progress(0, text="Starting render...")
+                                    def update_retry_progress(percent):
+                                        retry_bar.progress(percent, text=f"Rendering: {int(percent*100)}%")
+                                    
+                                    try:
+                                        video_path = item['file_path']
+                                        safe_title = "".join([c for c in clip['title'] if c.isalnum() or c in (' ','-','_')]).strip()
+                                        out_name = f"clip_{clip['id']}_{safe_title[:30]}_{int(time.time())}.mp4"
+                                        out_path = os.path.join(OUTPUT_DIR, out_name)
+                                        
+                                        final_path = clipper.save_vertical_clip(
+                                            video_path,
+                                            {'start': clip['start_time'], 'end': clip['end_time']},
+                                            out_path,
+                                            progress_callback=update_retry_progress
+                                        )
+                                        
+                                        retry_bar.empty()
+                                        if final_path:
+                                            database.update_clip_path(clip['id'], final_path)
+                                            st.success("✅ Rendered!")
+                                            st.rerun()
+                                    except Exception as e:
+                                        retry_bar.empty()
+                                        st.error(f"Retry failed: {e}")
+                            else:
+                                st.warning("Source video missing")
 
                             if clip.get('file_path') and os.path.exists(clip['file_path']):
                                 if st.button("🎵 Upload to TikTok", key=f"tt_upload_hist_{clip['id']}"):

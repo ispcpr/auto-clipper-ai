@@ -46,6 +46,14 @@ def init_db():
     conn.commit()
     conn.close()
 
+def update_clip_path(clip_id, file_path):
+    """Updates the file path of a specific clip."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE clips SET file_path = ? WHERE id = ?", (file_path, clip_id))
+    conn.commit()
+    conn.close()
+
 def save_analysis_result(youtube_url, title, video_path, clips_data):
     """
     Saves the full analysis result.
@@ -61,6 +69,7 @@ def save_analysis_result(youtube_url, title, video_path, clips_data):
     video_id = c.lastrowid
     
     # 2. Insert Clips
+    clip_ids = []
     for clip in clips_data:
         # Check if file_path exists in clip data (it might not be rendered yet, or might be)
         # For now we might store partial data or update later. 
@@ -77,17 +86,20 @@ def save_analysis_result(youtube_url, title, video_path, clips_data):
             video_id,
             clip.get("title", "Untitled"),
             hashtags_str,
-            clip.get("start_time"),
-            clip.get("end_time"),
+            clip.get("start"),
+            clip.get("end"),
             clip.get("score"),
             clip.get("reason", ""),
             clip.get("viral_detail", ""),
-            clip.get("file_path", "") # Might be empty if just analyzed
+            clip.get("file_path", "")
         ))
+        clip_ids.append(c.lastrowid)
+        
+
         
     conn.commit()
     conn.close()
-    return video_id
+    return video_id, clip_ids
 
 def get_all_history():
     conn = sqlite3.connect(DB_NAME)

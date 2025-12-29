@@ -170,7 +170,8 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
                     return os.path.abspath(potential_file)
         except:
              pass
-        return None
+        # Re-raise to show user the specific error
+        raise e
 
 def extract_audio(video_path, output_audio_path="temp_audio.mp3", logger=None):
     """Extracts audio from video for fast upload. Compresses to 32k mono to save size."""
@@ -248,7 +249,7 @@ def analyze_transcript_with_groq(transcript_obj, n_clips=3, logger=None):
     Analyze the following video transcript (Duration: ~{int(duration)} seconds).
     
     Identify the **top {n_clips} most viral/engaging segments** suitable for TikTok/Reels/Shorts.
-    Each segment should be between 15 and 60 seconds long.
+    Each segment should be between 59 and 90 seconds long.
     
     **CRITICAL INSTRUCTION**: 
     - The output **MUST BE IN BAHASA INDONESIA**.
@@ -300,6 +301,20 @@ def analyze_transcript_with_groq(transcript_obj, n_clips=3, logger=None):
         log_msg(logger, f"Groq Analysis Error: {e}")
         return []
 
+def get_transcript_words(transcript):
+    """
+    Safely extracts word-level timestamps from Groq transcript object.
+    Returns list of word objects/dicts.
+    """
+    if not transcript:
+        return []
+    
+    # Groq returns transcript.words as a list
+    if hasattr(transcript, 'words') and transcript.words:
+        return transcript.words
+    
+    return []
+
 def process_video_groq(video_path, n_clips=3, logger=None):
     """Pipeline: Extract -> Transcribe -> Analyze"""
     log_msg(logger, "▶️ Starting AI Pipeline...")
@@ -326,7 +341,10 @@ def process_video_groq(video_path, n_clips=3, logger=None):
         os.remove(audio_path)
     except: pass
     
-    return transcript.text, clips
+    # Extract words safely
+    words = get_transcript_words(transcript)
+    
+    return transcript.text, clips, words
 
 # --- MoviePy Rendering ---
 
@@ -334,17 +352,23 @@ def hex_to_rgb(hex_color):
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
-def save_vertical_clip(video_path, clip_data, output_path, progress_callback=None):
+def save_vertical_clip(video_path, clip_data, output_path, progress_callback=None, transcript_words=None):
     """
     Crops video to 9:16 vertical, adds blurred background, and simple captions (optional).
     Uses MoviePy.
+    Added: transcript_words support for burnt-in subtitles.
     """
-    t_start = clip_data['start']
-    t_end = clip_data['end']
+    t_start = clip_data.get('start', clip_data.get('start_time'))
+    t_end = clip_data.get('end', clip_data.get('end_time'))
     
     try:
         # Load Video
-        clip = VideoFileClip(video_path).subclip(t_start, t_end)
+        full_clip = VideoFileClip(video_path)
+        
+        if t_start is None: t_start = 0.0
+        if t_end is None: t_end = full_clip.duration
+        
+        clip = full_clip.subclip(t_start, t_end)
         
         # Target 9:16
         target_ratio = 9/16
@@ -374,7 +398,14 @@ def save_vertical_clip(video_path, clip_data, output_path, progress_callback=Non
         video_main = video_main.set_position("center")
         
         # Combine
-        final = CompositeVideoClip([bg_clip, video_main], size=(target_width, target_height))
+        final_layers = [bg_clip, video_main]
+        
+        # 3. Add Captions (Subtitles)
+        if transcript_words and os.getenv("ENABLE_CAPTIONS", "true").lower() == "true":
+            subs = generate_subtitle_clips(transcript_words, t_start, t_end)
+            final_layers.extend(subs)
+
+        final = CompositeVideoClip(final_layers, size=(target_width, target_height))
         
         # Render
         my_logger = MyBarLogger(progress_callback) if progress_callback else None
@@ -392,5 +423,156 @@ def save_vertical_clip(video_path, clip_data, output_path, progress_callback=Non
         return output_path
         
     except Exception as e:
-        print(f"Error processing clip: {e}")
-        return None
+        raise e
+def get_caption_text_for_clip(words, clip_start, clip_end):
+    """
+    Extracts readable caption text for the specific clip duration.
+    """
+    if not words: return ""
+    
+    text_parts = []
+    
+    for w in words:
+        w_start = w.start if hasattr(w, 'start') else w.get('start')
+        w_end = w.end if hasattr(w, 'end') else w.get('end')
+        w_word = w.word if hasattr(w, 'word') else w.get('word')
+        
+        if w_start is None or w_end is None:
+            continue
+            
+        if w_end > clip_start and w_start < clip_end:
+            text_parts.append(w_word.strip())
+    
+    return " ".join(text_parts)
+
+def get_clip_words(words, clip_start, clip_end):
+    """
+    Extracts the list of word objects/dicts for the clip.
+    Used for saving to DB for future re-rendering.
+    """
+    if not words: return []
+    
+    clip_words = []
+    for w in words:
+        w_start = w.start if hasattr(w, 'start') else w.get('start')
+        w_end = w.end if hasattr(w, 'end') else w.get('end')
+        
+        if w_start is None or w_end is None:
+            continue
+            
+        # Add 0.5s buffer
+        if w_end > clip_start and w_start < clip_end:
+             # Clone/dictify
+             wd = {
+                 'start': w_start,
+                 'end': w_end,
+                 'word': w.word if hasattr(w, 'word') else w.get('word')
+             }
+             clip_words.append(wd)
+             
+    return clip_words
+
+def create_text_clip_image(text, fontsize=80, color='yellow', stroke_width=4, stroke_color='black'):
+    """
+    Creates a PIL image with text (for subtitles).
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    
+    # Try to load a nice font
+    try:
+        font = ImageFont.truetype("arial.ttf", fontsize)
+    except:
+        font = ImageFont.load_default()
+    
+    # Calculate text size
+    dummy_img = Image.new('RGBA', (1, 1))
+    draw = ImageDraw.Draw(dummy_img)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    # Create image with padding
+    padding = 20
+    img_width = text_width + padding * 2
+    img_height = text_height + padding * 2
+    img = Image.new('RGBA', (img_width, img_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    
+    # Draw stroke (outline)
+    x = padding
+    y = padding
+    draw.text((x-stroke_width, y), text, font=font, fill=stroke_color)
+    draw.text((x+stroke_width, y), text, font=font, fill=stroke_color)
+    draw.text((x, y-stroke_width), text, font=font, fill=stroke_color)
+    draw.text((x, y+stroke_width), text, font=font, fill=stroke_color)
+    draw.text((x-stroke_width, y-stroke_width), text, font=font, fill=stroke_color)
+    draw.text((x+stroke_width, y+stroke_width), text, font=font, fill=stroke_color)
+    draw.text((x-stroke_width, y+stroke_width), text, font=font, fill=stroke_color)
+    draw.text((x+stroke_width, y-stroke_width), text, font=font, fill=stroke_color)
+    
+    # Draw text
+    draw.text((x, y), text, font=font, fill=color)
+    
+    return np.array(img)
+
+def generate_subtitle_clips(words, clip_start, clip_end, video_size=(1080, 1920)):
+    """
+    Generates MoviePy clips for subtitles based on word timestamps.
+    """
+    subtitle_clips = []
+    
+    if not words:
+        return []
+
+    # Filter words relevant to this clip
+    clip_words = []
+    for w in words:
+        # Check compatibility with object or dict
+        w_start = w.start if hasattr(w, 'start') else w.get('start')
+        w_end = w.end if hasattr(w, 'end') else w.get('end')
+        w_word = w.word if hasattr(w, 'word') else w.get('word')
+        
+        if w_start is None or w_end is None:
+             continue
+             
+        if w_end > clip_start and w_start < clip_end:
+            clip_words.append({
+                'start': max(w_start, clip_start) - clip_start, # Relative time
+                'end': min(w_end, clip_end) - clip_start,       # Relative time
+                'word': w_word.strip()
+            })
+            
+    # Create clips
+    for item in clip_words:
+        word_text = item['word']
+        start_t = item['start']
+        end_t = item['end']
+        duration = end_t - start_t
+        
+        # Min duration for visibility
+        if duration < 0.1: duration = 0.1
+        
+        # Create Image
+        img_array = create_text_clip_image(word_text, fontsize=80, color='yellow', stroke_width=4)
+        
+        txt_clip = (ImageClip(img_array)
+                    .set_start(start_t)
+                    .set_duration(duration)
+                    .set_position(('center', 1400))) # Bottom-center position
+                    
+        subtitle_clips.append(txt_clip)
+        
+    return subtitle_clips
+def get_transcript_words(transcript):
+    """
+    Safely extracts word-level timestamps from Groq transcript object.
+    Returns list of word objects/dicts.
+    """
+    if not transcript:
+        return []
+    
+    # Groq returns transcript.words as a list
+    if hasattr(transcript, 'words') and transcript.words:
+        return transcript.words
+    
+    return []
