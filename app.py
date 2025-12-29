@@ -191,6 +191,12 @@ if mode == "Analisis Baru":
         
         def log(self, msg):
             msg_str = str(msg)
+            
+            # --- CRITICAL FIX: Filter out noisy yt-dlp download logs ---
+            # These logs occur 10-20 times per second and crash the Streamlit websocket
+            if "[download]" in msg_str and "%" in msg_str:
+                return 
+            
             # Print to console for debugging crashes
             print(f"[LOG] {msg_str}")
             
@@ -360,15 +366,22 @@ if mode == "Analisis Baru":
                         st.video(clip['file_path'])
                         st.write(f"**{clip['title']}**")
                         st.caption(clip.get('viral_detail', clip['reason']))
-                        with open(clip['file_path'], "rb") as f:
-                            st.download_button(
-                                label=f"Download Clip #{i+1}",
-                                data=f,
-                                file_name=os.path.basename(clip['file_path']),
-                                mime="video/mp4",
-                                key=f"down_auto_{i}",
-                                use_container_width=True
-                            )
+                        # Lazy Download for Analysis Results
+                        dl_key = f"ready_dl_new_{i}"
+                        if dl_key not in st.session_state:
+                            if st.button("⬇️ Siapkan Download", key=f"prep_new_{i}", use_container_width=True):
+                                st.session_state[dl_key] = True
+                                st.rerun()
+                        else:
+                            with open(clip['file_path'], "rb") as f:
+                                st.download_button(
+                                    label="⬇️ Download Sekarang",
+                                    data=f,
+                                    file_name=os.path.basename(clip['file_path']),
+                                    mime="video/mp4",
+                                    key=f"down_auto_{i}",
+                                    use_container_width=True
+                                )
                         
                         st.divider()
                         if st.button("🎵 Upload to TikTok", key=f"tt_upload_{i}", use_container_width=True):
@@ -460,7 +473,25 @@ elif mode == "Riwayat":
                                 st.warning("Source video missing")
 
                             if clip.get('file_path') and os.path.exists(clip['file_path']):
-                                if st.button("🎵 Upload to TikTok", key=f"tt_upload_hist_{clip['id']}"):
+                                # Lazy Download for History
+                                dl_hist_key = f"ready_dl_hist_{clip['id']}"
+                                
+                                if dl_hist_key not in st.session_state:
+                                    if st.button("⬇️ Siapkan Download", key=f"prep_hist_{clip['id']}", use_container_width=True):
+                                        st.session_state[dl_hist_key] = True
+                                        st.rerun()
+                                else:
+                                    with open(clip['file_path'], "rb") as f:
+                                        st.download_button(
+                                            label="⬇️ Download Sekarang",
+                                            data=f,
+                                            file_name=os.path.basename(clip['file_path']),
+                                            mime="video/mp4",
+                                            key=f"down_hist_{clip['id']}",
+                                            use_container_width=True
+                                        )
+
+                                if st.button("🎵 Upload to TikTok", key=f"tt_upload_hist_{clip['id']}", use_container_width=True):
                                      with st.spinner("Opening browser..."):
                                         hashtags = " ".join([f"#{t.replace('#','')}" for t in clip['hashtags']])
                                         desc = f"{clip['title']}\n\n{detail}\n\n{hashtags}"
