@@ -10,42 +10,9 @@ import sys
 import io
 import tiktok_uploader
 import socket
-# import dns.resolver # Disabled for local execution
-
-# --- NUCLEAR NETWORK FIX: Bypass System DNS entirely ---
-# Disabled for local execution
-# _orig_getaddrinfo = socket.getaddrinfo
-#
-# def _getaddrinfo_bypassed(host, port, family=0, type=0, proto=0, flags=0):
-#     try:
-#         socket.inet_aton(host)
-#         return _orig_getaddrinfo(host, port, family, type, proto, flags)
-#     except:
-#         pass
-#
-#     try:
-#         resolver = dns.resolver.Resolver()
-#         resolver.nameservers = ['8.8.8.8', '1.1.1.1']
-#         response = resolver.resolve(host, 'A')
-#         ip_address = response[0].to_text()
-#         return [(socket.AF_INET, type, proto, '', (ip_address, port))]
-#     except Exception as e:
-#         return _orig_getaddrinfo(host, port, family, type, proto, flags)
-#
-# socket.getaddrinfo = _getaddrinfo_bypassed
-# print("DEBUG: Applied Nuclear Custom DNS Resolver (SKIPPED FOR LOCAL)")
-# -----------------------------------------------------
 
 # --- Database Init ---
 database.init_db()
-
-# --- DNS Debug (Run once) ---
-try:
-    import socket
-    st.write(f"<!-- DNS Check: {socket.gethostbyname('www.youtube.com')} -->")
-    print(f"DEBUG: Resolved www.youtube.com to {socket.gethostbyname('www.youtube.com')}")
-except Exception as e:
-    print(f"DEBUG: DNS Resolution Failed: {e}")
 
 # --- Logging Setup (Session State) ---
 if 'log_capture' not in st.session_state:
@@ -100,25 +67,21 @@ def check_password():
         
         env_user = os.getenv("APP_USERNAME", "admin")
         env_pwd = os.getenv("APP_PASSWORD", "password")
-        print(f"DEBUG: Expected User='{env_user}', Pass='{env_pwd}'") # Debug print
 
         if user == env_user and pwd == env_pwd:
             st.session_state["password_correct"] = True
-            # Don't delete immediately to be safe, or check existence before delete
             if "password" in st.session_state: del st.session_state["password"]
             if "username" in st.session_state: del st.session_state["username"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show input for password.
         st.title("🔐 Login Required")
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", on_change=password_entered, key="password")
         st.button("Login", on_click=password_entered)
         return False
     elif not st.session_state["password_correct"]:
-        # Password failure, show input for password.
         st.title("🔐 Login Required")
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", on_change=password_entered, key="password")
@@ -126,7 +89,6 @@ def check_password():
         st.button("Login", on_click=password_entered)
         return False
     else:
-        # Password correct.
         return True
 
 if not check_password():
@@ -139,13 +101,8 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3074/3074767.png", width=50)
     st.subheader("Navigation")
     
-    # Modern Button Navigation
     if st.button("🏠 Analisis Baru", key="nav_new", use_container_width=True, type="primary" if st.session_state['active_tab'] == "Analisis Baru" else "secondary"):
         st.session_state['active_tab'] = "Analisis Baru"
-        if 'viral_clips' in st.session_state:
-             # Preserve session state if switching back? Or reset?
-             # User might want to see clips. Let's not reset.
-             pass
         st.rerun()
         
     if st.button("📚 Riwayat Analisis", key="nav_history", use_container_width=True, type="primary" if st.session_state['active_tab'] == "Riwayat" else "secondary"):
@@ -166,26 +123,38 @@ with st.sidebar:
         
         st.divider()
         st.caption("Configuration")
-        target_clip_count = st.slider("Target Clips", 1, 10, 3)
         
-        # --- Cookies Uploader for Bot Bypass ---
-        st.divider()
-        st.caption("🤖 Bot Verification Bypass")
-        uploaded_cookies = st.file_uploader("Upload cookies.txt", type=["txt"], help="Upload cookies.txt from YouTube to bypass 'Sign in' errors.")
-        if uploaded_cookies is not None:
-            # Save to root as cookies.txt
-            with open("cookies.txt", "wb") as f:
-                f.write(uploaded_cookies.getbuffer())
-            st.success("✅ Cookies saved! Restarting...")
-            time.sleep(1)
-            st.rerun()
-
-        if os.path.exists("cookies.txt"):
-            st.info("🍪 Cookies active")
-            if st.button("Delete Cookies"):
-                os.remove("cookies.txt")
+        # --- Cookies Uploader (Primary Auth) ---
+        with st.expander("🍪 Login with Cookies (Required)", expanded=True):
+            st.caption("Upload `cookies.txt` to bypass 'Sign in' errors.")
+            uploaded_cookies = st.file_uploader("Upload cookies.txt", type=["txt"], key="cookie_uploader")
+            
+            if uploaded_cookies is not None:
+                with open("cookies.txt", "wb") as f:
+                    f.write(uploaded_cookies.getbuffer())
+                st.success("✅ Cookies saved! Restarting...")
+                time.sleep(1)
                 st.rerun()
+
+            if os.path.exists("cookies.txt"):
+                st.success("✅ Logged In (cookies.txt active)")
+                if st.button("Logout (Delete Cookies)"):
+                    os.remove("cookies.txt")
+                    st.rerun()
+            else:
+                st.warning("❌ Not Logged In")
+                
+            with st.expander("❓ How to get cookies.txt?"):
+                st.markdown("""
+                1. Install **"Get cookies.txt LOCALLY"** (Chrome/Firefox).
+                2. Login to YouTube.
+                3. Click extension > "Export".
+                4. Upload the file here.
+                """)
         # ---------------------------------------
+
+        st.divider()
+        target_clip_count = st.slider("Target Clips", 1, 10, 3)
         
         if st.button("↻ Reset Session", use_container_width=True):
             if 'viral_clips' in st.session_state:
@@ -222,7 +191,10 @@ if mode == "Analisis Baru":
         
         def log(self, msg):
             msg_str = str(msg)
-            # Formatting: Ensure newlines for clarity
+            # Print to console for debugging crashes
+            print(f"[LOG] {msg_str}")
+            
+            # Formatting
             clean_msg = msg_str.replace('\r', '\n')
             if not clean_msg.endswith('\n'):
                 clean_msg += '\n'
@@ -260,6 +232,7 @@ if mode == "Analisis Baru":
                         download_bar.progress(percent, text=text)
 
                     try:
+                        # Clean call to download_video (no use_oauth)
                         video_path = clipper.download_video(
                             youtube_url, 
                             DOWNLOAD_DIR, 
@@ -294,21 +267,19 @@ if mode == "Analisis Baru":
                         st.session_state['viral_clips'] = viral_clips
                         status.update(label="Analysis Complete!", state="complete", expanded=False)
 
-                # 3. Auto-Render (Phase 3 Moved Here)
+                # 3. Auto-Render
                 with st.status("⚙️ Phase 3: Auto-Rendering Clips...", expanded=True) as status:
                     render_bar = st.progress(0, text="Rendering Clips...")
                     
                     for i, clip in enumerate(st.session_state['viral_clips']):
                         status.write(f"Rendering #{i+1}: {clip['title']}...")
                         
-                        # Sub-progress bar for the current clip
                         clip_bar = st.progress(0, text=f"Rendering Clip {i+1}...")
                         def update_clip_progress(percent):
                             clip_bar.progress(percent, text=f"Rendering Clip {i+1}: {int(percent*100)}%")
 
                         try:
                             video_path = st.session_state['video_path']
-                            # Sanitize title
                             safe_title = "".join([c for c in clip['title'] if c.isalnum() or c in (' ','-','_')]).strip()
                             out_name = f"clip_{i+1}_{safe_title[:30]}_{int(time.time())}.mp4"
                             out_path = os.path.join(OUTPUT_DIR, out_name)
@@ -320,7 +291,6 @@ if mode == "Analisis Baru":
                                 progress_callback=update_clip_progress
                             )
 
-                            
                             clip['file_path'] = final_clip_path
                             live_logger.info(f"Rendered: {final_clip_path}")
                             
@@ -329,7 +299,6 @@ if mode == "Analisis Baru":
                         
                         render_bar.progress((i + 1) / len(st.session_state['viral_clips']))
                     
-                    # Save Final Result to DB
                     try:
                         video_title = os.path.basename(st.session_state['video_path'])
                         database.save_analysis_result(youtube_url, video_title, st.session_state['video_path'], st.session_state['viral_clips'])
@@ -353,7 +322,7 @@ if mode == "Analisis Baru":
                     with st.container(border=True):
                         st.video(clip['file_path'])
                         st.write(f"**{clip['title']}**")
-                        st.caption(clip.get('viral_detail', clip['reason'])) # Show hooks
+                        st.caption(clip.get('viral_detail', clip['reason']))
                         with open(clip['file_path'], "rb") as f:
                             st.download_button(
                                 label=f"Download Clip #{i+1}",
@@ -367,10 +336,8 @@ if mode == "Analisis Baru":
                         st.divider()
                         if st.button("🎵 Upload to TikTok", key=f"tt_upload_{i}", use_container_width=True):
                             with st.spinner("Opening browser... Please login if needed."):
-                                # Prepare description
                                 hashtags = " ".join([f"#{t.replace('#','')}" for t in clip['hashtags']])
                                 desc = f"{clip['title']}\n\n{clip['viral_detail']}\n\n{hashtags}"
-                                
                                 msg = tiktok_uploader.upload_video(clip['file_path'], desc)
                                 st.info(msg)
 
@@ -385,30 +352,23 @@ elif mode == "Riwayat":
     
     for item in history_data:
         with st.container(border=True):
-            # Row 1: Header
             c_head, c_btn = st.columns([8, 1])
             with c_head:
                 st.markdown(f"### {item['title']}")
                 st.caption(f"📅 {item['created_at']} | 🔗 {item['youtube_url']}")
             with c_btn:
                 if st.button("🗑️", key=f"del_vid_{item['id']}", help="Delete Video & Clips"):
-                    # Delete Video Logic
                     v_path, c_paths = database.delete_video(item['id'])
-                    
-                    # Remove files
                     if v_path and os.path.exists(v_path):
                         try: os.remove(v_path)
                         except: pass
-                    
                     for cp in c_paths:
                         if cp and os.path.exists(cp):
                             try: os.remove(cp) 
                             except: pass
-                            
                     st.success("Video deleted.")
                     st.rerun()
 
-            # Row 2: Content
             col_left, col_right = st.columns([1, 2])
             
             with col_left:
@@ -418,10 +378,8 @@ elif mode == "Riwayat":
                     st.warning("Original video missing")
             
             with col_right:
-                # Vertical List of Clips (Cards)
                 for clip in item['clips']:
                     with st.expander(f"🎬 {clip['title']} (Score: {clip['score']})", expanded=False):
-                        # Use markdown for rich text
                         detail = clip.get('viral_detail', clip.get('reason', ''))
                         st.markdown(f"**Description:**\n{detail}")
                         

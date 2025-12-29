@@ -11,7 +11,12 @@ from dotenv import load_dotenv
 import numpy as np
 from PIL import Image, ImageFont, ImageDraw
 from proglog import ProgressBarLogger
+
+import io
+import contextlib
+import re
 import socket
+import requests
 
 # Force IPv4 locally in this module too just in case
 _orig_getaddrinfo_clipper = socket.getaddrinfo
@@ -29,11 +34,6 @@ class MyBarLogger(ProgressBarLogger):
         self.user_callback = callback
 
     def bars_callback(self, bar, attr, value, old_value=None):
-        # Every time the logger updates, this function is called.
-        # 'bar' is the name of the bar (e.g. 't')
-        # 'value' is the current value
-        # 'attr' might be 'total' etc.
-        # We only care about the main progress bar usually named 't' (time) for video writing
         if bar == 't' and self.user_callback:
             total = self.bars[bar]['total']
             if total > 0:
@@ -54,15 +54,49 @@ def log_msg(logger, msg):
     else:
         print(msg)
 
-# --- 1. Downloading the YouTube Video ---
+# --- 2. Browser Cookie Import Helper ---
+import subprocess
+
+def import_browser_cookies(browser="chrome", output_file="cookies.txt"):
+    """
+    Runs yt-dlp to extract cookies from the browser and save them to a file.
+    User must close the browser for this to work on Windows.
+    """
+    cmd = [
+        "yt-dlp",
+        "--cookies-from-browser", browser,
+        "--cookies", output_file,
+        "--skip-download",
+        "https://www.youtube.com"
+    ]
+    
+    try:
+        # Run process and capture output to check for "Close browser" warnings
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        # Check if cookies.txt was created
+        if os.path.exists(output_file):
+            return True, "Success"
+        else:
+            return False, "Cookies file not created. (Unknown error)"
+            
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr or e.stdout
+        # Common error: "Permission denied" or "Database locked"
+        if "lock" in err_msg.lower() or "permission" in err_msg.lower() or "close" in err_msg.lower():
+            return False, f"Please CLOSE {browser} completely and try again."
+        return False, f"Error: {err_msg}"
+    except Exception as e:
+        return False, str(e)
+
 def download_video(youtube_url, output_dir="downloads", progress_callback=None, logger=None):
     """
-    Downloads a YouTube video to the specified directory.
-    Returns the absolute path to the downloaded file.
+    Dispatcher for video downloading.
+    Only Engine: 'yt-dlp'
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Check if URL is valid
+    # Default to yt-dlp
     if not youtube_url or "youtube.com" not in youtube_url and "youtu.be" not in youtube_url:
         log_msg(logger, "Invalid YouTube URL")
         return None
@@ -99,40 +133,34 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
         'force_ipv4': True,
         # Improve bot avoidance
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        # Explicitly tell yt-dlp to use nodejs/node (only 'node' key is supported)
-        # Format must be a dict: { binary_name: {config} }
-        'js_runtimes': {
-            'node': {},
-        },
-        # Enable downloading JS Challenge solvers (PhantomJS/EJS) from GitHub
-        # This fixes "Remote component challenge solver script was skipped"
-        'remote_components': ['ejs:github'],
     }
-
+    
     # Optional Cookies Support (manual bypass)
     cookies_path = "cookies.txt"
     if os.path.exists(cookies_path):
         ydl_opts['cookiefile'] = cookies_path
         log_msg(logger, f"Using cookies from {cookies_path}")
     else:
-        # Fallback to cookies from environment variable if needed in future
-        pass
+        # Fallback to browser cookies
+        log_msg(logger, "cookies.txt not found. Attempting to use cookies from Chrome browser...")
+        ydl_opts['cookiesfrombrowser'] = ('chrome',)
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             log_msg(logger, f"Downloading {youtube_url}...")
-            # Extract info first without downloading to get filename reliably? 
-            # Actually standard flow is fine if we catch the error.
             info_dict = ydl.extract_info(youtube_url, download=True)
             video_filename = ydl.prepare_filename(info_dict)
             abs_path = os.path.abspath(video_filename)
             log_msg(logger, f"Video downloaded to: {abs_path}")
             return abs_path
     except Exception as e:
+        err_str = str(e)
+        if "cookie" in err_str.lower() or "locked" in err_str.lower() or "permission" in err_str.lower():
+             log_msg(logger, "⚠️ WARNING: Auto-cookies failed. Please CLOSE your browser (Chrome) and try again, OR upload 'cookies.txt'.")
+             log_msg(logger, "ℹ️ See the 'How to get cookies.txt' guide in the sidebar for a permanent fix.")
+        
         log_msg(logger, f"Error downloading video: {e}")
         # WinError 32 Workaround
-        # Check if the file actually exists despite the error
-        # We need to re-prepare filename to check
         try:
              with yt_dlp.YoutubeDL(ydl_opts) as ydl: # Re-init to get filename
                 info = ydl.extract_info(youtube_url, download=False)
@@ -143,34 +171,28 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
         except:
              pass
         return None
-        return None
-
-# --- GROQ PIPELINE: Audio Extraction -> Whisper -> Llama3 ---
 
 def extract_audio(video_path, output_audio_path="temp_audio.mp3", logger=None):
     """Extracts audio from video for fast upload. Compresses to 32k mono to save size."""
     log_msg(logger, f"Extracting audio from {video_path}...")
     try:
         video = VideoFileClip(video_path)
-        # Use 32k bitrate and mono channel to keep file size small (Groq limit is ~25MB)
-        # MoviePy prints to stdout by default, hard to redirect without capture, 
-        # but we can try to silence it or let it print (which won't go to logger automatically unless we capture stdout)
         video.audio.write_audiofile(
             output_audio_path, 
             codec='mp3', 
             bitrate='32k',
             ffmpeg_params=["-ac", "1"], # Mono
             verbose=False, 
-            logger=None # Silence moviepy logger or pass None
+            logger=None 
         )
         
-        # Check size
         size_mb = os.path.getsize(output_audio_path) / (1024 * 1024)
         log_msg(logger, f"Audio extracted: {output_audio_path} (Size: {size_mb:.2f} MB)")
         
         if size_mb > 25:
             log_msg(logger, "Warning: Audio file is still larger than 25MB. Transcription might fail.")
-            
+        
+        video.close()
         return output_audio_path
     except Exception as e:
         log_msg(logger, f"Error extracting audio: {e}")
@@ -205,7 +227,23 @@ def analyze_transcript_with_groq(transcript_obj, n_clips=3, logger=None):
     
     log_msg(logger, "Analyzing transcript with Groq Llama 3...")
     
-    prompt = f"""
+    logit_has_template = os.getenv("AI_PROMPT_TEMPLATE")
+    
+    if logit_has_template:
+        try:
+            transcript_short = textwrap.shorten(transcript_text, width=15000, placeholder="...(truncated)")
+            prompt = logit_has_template.format(
+                duration=int(duration),
+                n_clips=n_clips,
+                transcript=transcript_short
+            )
+            log_msg(logger, "✅ Using Custom AI Prompt from .env")
+        except Exception as e:
+             log_msg(logger, f"⚠️ Error formatting .env prompt: {e}. Using default.")
+             logit_has_template = None # Fallback
+
+    if not logit_has_template:
+        prompt = f"""
     You are a professional video editor and content strategist. 
     Analyze the following video transcript (Duration: ~{int(duration)} seconds).
     
@@ -222,317 +260,137 @@ def analyze_transcript_with_groq(transcript_obj, n_clips=3, logger=None):
     3. A **Viral Hook/Detail**: A 1-2 sentence compelling description in Bahasa Indonesia that makes people curious to watch.
     
     Transcript:
-    \"\"\"{transcript_text[:25000]}\"\"\" (Truncated if too long)
+    {textwrap.shorten(transcript_text, width=15000, placeholder="...(truncated)")}
     
-    Return a strictly VALID JSON list of objects.
-    Structure:
+    **RETURN JSON FORMAT ONLY**:
     [
-    {{
-            "start_time": <float seconds>,
-            "end_time": <float seconds>,
-            "score": <1-10>,
-            "reason": "<technical reason for selection>",
-            "viral_detail": "<compelling hook/caption for the user>",
-            "title": "<Clickbait Title in Bahasa Indonesia>",
-            "hashtags": ["#tag1", "#tag2"]
-    }}
+      {{
+        "start": <start_time_seconds>,
+        "end": <end_time_seconds>,
+        "title": "<Clickbait Title>",
+        "reason": "<English Reason for selection>",
+        "viral_detail": "<Bahasa Indonesia Hook>",
+        "hashtags": ["#tag1", "#tag2", "#tag3"],
+        "score": <virality_score_1_to_10>
+      }},
+      ...
     ]
     """
-    
+
     try:
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+        completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a viral content expert. Output strictly valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
             temperature=0.7,
-            max_tokens=2048,
-            stream=False,
             response_format={"type": "json_object"}
         )
-        
-        result = chat_completion.choices[0].message.content
+        result = completion.choices[0].message.content
         data = json.loads(result)
-        
+        # Handle { "clips": [...] } or just [...]
         if isinstance(data, dict):
-            keys = list(data.keys())
-            if keys: data = data[keys[0]]
-                
-        final_clips = []
-        if isinstance(data, list):
-            for item in data:
-                # Map back words to this segment if available
-                segment_words = []
-                if hasattr(transcript_obj, 'words'):
-                        start = float(item.get("start_time", 0))
-                        end = float(item.get("end_time", 0))
-                        try:
-                            # Filter words in this range
-                            all_words = transcript_obj.words if isinstance(transcript_obj.words, list) else []
-                            segment_words = []
-                            for w in all_words:
-                                w_start = w.get('start') if isinstance(w, dict) else w.start
-                                w_end = w.get('end') if isinstance(w, dict) else w.end
-                                if w_start >= start and w_end <= end:
-                                    segment_words.append(w)
-                        except:
-                            pass
-
-                final_clips.append({
-                    "start": item.get("start_time"),
-                    "end": item.get("end_time"),
-                    "text": item.get("quote", ""),
-                    "score": item.get("score"),
-                    "reason": item.get("reason"),
-                    "viral_detail": item.get("viral_detail", item.get("reason", "")), # Fallback to reason
-                    "title": item.get("title", "Untitled Clip"),
-                    "hashtags": item.get("hashtags", []),
-                    "words": segment_words
-                })
-        
-        return final_clips
+             if "clips" in data: return data["clips"]
+             if "segments" in data: return data["segments"]
+             # If keys are just the list
+             return list(data.values())[0] if data else []
+        return data
     except Exception as e:
-        log_msg(logger, f"Groq Analysis error: {e}")
+        log_msg(logger, f"Groq Analysis Error: {e}")
         return []
 
 def process_video_groq(video_path, n_clips=3, logger=None):
-    """Orchestrates the Groq Fast Pipeline."""
+    """Pipeline: Extract -> Transcribe -> Analyze"""
+    log_msg(logger, "▶️ Starting AI Pipeline...")
     
-    # 1. Extract Audio
-    audio_path = os.path.join(os.path.dirname(video_path), "temp_groq_audio.mp3")
-    if not extract_audio(video_path, audio_path, logger=logger):
+    log_msg(logger, "1️⃣ Extracting Audio...")
+    audio_path = extract_audio(video_path, logger=logger)
+    if not audio_path: 
+        log_msg(logger, "❌ Audio extraction failed.")
         return None, []
-        
-    try:
-        # 2. Transcribe
-        transcript_obj = transcribe_with_groq(audio_path, logger=logger)
-        if not transcript_obj:
-            return None, []
-            
-        full_text = transcript_obj.text
-        duration = transcript_obj.duration
-        
-        # 3. Analyze
-        # Pass the full object, not just text, so we can access duration and words
-        clips = analyze_transcript_with_groq(transcript_obj, n_clips, logger=logger)
-        
-        return transcript_obj.text, clips
-        
-    finally:
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
+    
+    log_msg(logger, "2️⃣ Transcribing Audio (Whisper)...")
+    transcript = transcribe_with_groq(audio_path, logger=logger)
+    if not transcript: 
+        log_msg(logger, "❌ Transcription failed.")
+        return None, []
+    
+    log_msg(logger, "3️⃣ Analyzing Content (Llama 3)...")
+    clips = analyze_transcript_with_groq(transcript, n_clips, logger=logger)
+    
+    # Clean up temp audio
+    try: 
+        video_handle = VideoFileClip(video_path)
+        video_handle.close() # Ensure video is released? No, just audio.
+        os.remove(audio_path)
+    except: pass
+    
+    return transcript.text, clips
 
+# --- MoviePy Rendering ---
 
-# --- HELPERS for PIL Text ---
-def create_text_clip_pil(text, fontsize=60, color='yellow', font_path='Arial', stroke_color='black', stroke_width=3, size=None):
-    """
-    Creates an ImageClip with text using PIL to avoid ImageMagick requirement.
-    """
-    # 1. Create a dummy image to calculate text size or use provided size
-    if size is None:
-        size = (1000, 200) # Default canvas
-    
-    # Try loading a better font, default to default if fails
-    try:
-        # On Windows 'arial.ttf' usually works if in system path or just 'arial' depending on PIL version
-        font = ImageFont.truetype("arial.ttf", fontsize)
-    except IOError:
-        try:
-             font = ImageFont.truetype("Arial.ttf", fontsize)
-        except:
-             font = ImageFont.load_default()
-             # Print warning? 
-    
-    # Measure text size (basic)
-    # PIL 9.2.0 preferred: font.getbbox(text) -> (left, top, right, bottom)
-    # Older: font.getsize(text) -> (width, height)
-    
-    # We will create a transparent image
-    img = Image.new('RGBA', size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    
-    # Draw Text with Stroke manually (simple version)
-    # PIL doesn't support complex strokes easily, so we draw multiple times
-    
-    x, y = size[0] // 2, size[1] // 2
-    
-    # Center text alignment
-    # We need to calculate text width/height to center it properly
-    try:
-        left, top, right, bottom = font.getbbox(text)
-        w = right - left
-        h = bottom - top
-    except:
-        w, h = draw.textsize(text, font=font)
-        
-    # Adjustment for centering
-    # This centers based on the provided size
-    # x = (size[0] - w) / 2
-    # y = (size[1] - h) / 2
-    
-    # Actually ImageDraw.text anchor='mm' does centering if supported
-    
-    # Draw Stroke
-    if stroke_width > 0:
-        for adj_x in range(-stroke_width, stroke_width+1):
-            for adj_y in range(-stroke_width, stroke_width+1):
-                draw.text((x+adj_x, y+adj_y), text, font=font, fill=stroke_color, anchor="mm")
+def hex_to_rgb(hex_color):
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
-    # Draw Main Text
-    draw.text((x, y), text, font=font, fill=color, anchor="mm")
-    
-    # Convert to numpy
-    numpy_img = np.array(img)
-    
-    return ImageClip(numpy_img)
-
-# --- 9. Video Extraction + Blurred Background ---
-def save_vertical_clip(video_path, segment, output_path, blur_intensity=51, progress_callback=None):
+def save_vertical_clip(video_path, clip_data, output_path, progress_callback=None):
     """
-    Creates a 9:16 vertical video with blurred background and subtitles.
+    Crops video to 9:16 vertical, adds blurred background, and simple captions (optional).
+    Uses MoviePy.
     """
-    print(f"Processing clip: {output_path}")
-    target_w, target_h = 1080, 1920
+    t_start = clip_data['start']
+    t_end = clip_data['end']
     
     try:
-        with VideoFileClip(video_path) as video:
-            start = float(segment["start"])
-            end = float(segment["end"])
-            
-            # Extract the subclip
-            clip = video.subclip(start, end)
-            
-            # 1. Prepare Main Content (Center)
-            clip_aspect = clip.w / clip.h
-            target_aspect = target_w / target_h
-            
-            if clip_aspect > target_aspect:
-                # Video is wider than 9:16 (e.g. 16:9). Fit to width.
-                main_clip = resize(clip, width=target_w)
-            else:
-                main_clip = resize(clip, height=target_h)
-            
-            # 2. Prepare Background (Blurred)
-            # Resize logic for background to fill screen
-            if clip_aspect > target_aspect:
-                bg_clip = resize(clip, height=target_h)
-            else:
-                bg_clip = resize(clip, width=target_w)
-                
-            # Crop to fill
-            bg_clip = bg_clip.crop(
-                x_center=bg_clip.w/2, 
-                y_center=bg_clip.h/2, 
-                width=target_w, 
-                height=target_h
-            )
-            
-            # Blur
-            bg_clip = bg_clip.fl_image(lambda image: cv2.GaussianBlur(image, (blur_intensity, blur_intensity), 0))
-            
-            # Darken Background (Dimming) to make main clip pop
-            # Create a black overlay
-            dim_clip = ColorClip(size=(target_w, target_h), color=(0,0,0)).set_opacity(0.6).set_duration(bg_clip.duration)
-            bg_clip = CompositeVideoClip([bg_clip, dim_clip])
-            
-            # 3. Composite
-            # Add small margin/padding to main clip so it looks cleaner
-            if clip_aspect > target_aspect:
-                 main_clip = resize(clip, width=target_w - 60) # 30px padding each side
-            else:
-                 main_clip = resize(clip, height=target_h - 60)
-                 
-            video_comp = CompositeVideoClip([
-                bg_clip,
-                main_clip.set_position("center")
-            ])
-            
-            # 4. Add Captions (PIL TextClip approach)
-            subtitle_clips = []
-            if "words" in segment and len(segment["words"]) > 0:
-                 words = segment["words"]
-                 # Group words into chunks (e.g. 3-5 words at a time)
-                 chunk_size = 4
-                 
-                 for i in range(0, len(words), chunk_size):
-                     chunk = words[i:i+chunk_size]
-                     
-                     # Robustly access attributes (dict or object)
-                     chunk_text = []
-                     c_start = None
-                     c_end = None
-                     
-                     for w in chunk:
-                         w_word = w.get('word') if isinstance(w, dict) else w.word
-                         w_start = w.get('start') if isinstance(w, dict) else w.start
-                         w_end = w.get('end') if isinstance(w, dict) else w.end
-                         
-                         chunk_text.append(w_word)
-                         if c_start is None: c_start = w_start
-                         c_end = w_end
-                         
-                     txt = " ".join(chunk_text).strip()
-                     
-                     # Relative timestamps
-                     t_start = c_start - start 
-                     t_end = c_end - start
-                     
-                     # Clamp
-                     t_start = max(0, t_start)
-                     t_end = min(video_comp.duration, t_end)
-                     
-                     if t_end > t_start:
-                         try:
-                             # Use PIL Text Generator
-                             # Pass explicit size to ensure we have enough room
-                             # TikTok Safe Zone: Avoid right side (buttons) and bottom description
-                             # Reduce width to avoid right icons (~120px) + left padding
-                             safe_width = target_w - 240
-                             
-                             txt_clip = create_text_clip_pil(
-                                 txt,
-                                 fontsize=55, # Slightly smaller for safety
-                                 color='yellow',
-                                 stroke_color='black',
-                                 stroke_width=3,
-                                 size=(safe_width, 250) # Fixed height strip
-                             )
-                             
-                             # Position: Center, Higher up to avoid TikTok bottom overlay (~bottom 25-30% is risky)
-                             # 1920 * 0.65 = ~1250
-                             txt_clip = txt_clip.set_position(('center', 1250)).set_start(t_start).set_end(t_end)
-                             subtitle_clips.append(txt_clip)
-                         except Exception as e: 
-                             print(f"Subtitle error: {e}")
-                             break
-
-            if subtitle_clips:
-                final = CompositeVideoClip([video_comp] + subtitle_clips)
-            else:
-                final = video_comp
-
-            # Configure Logger
-            my_logger = None
-            if progress_callback:
-                my_logger = MyBarLogger(progress_callback)
-            else:
-                my_logger = 'bar' # Default moviepy logger
-
-            final.write_videofile(
-                output_path, 
-                codec="libx264", 
-                audio_codec="aac", 
-                threads=4, 
-                preset="medium",
-                fps=24,
-                logger=my_logger
-            )
-            
-            return output_path
-
+        # Load Video
+        clip = VideoFileClip(video_path).subclip(t_start, t_end)
+        
+        # Target 9:16
+        target_ratio = 9/16
+        target_height = 1920
+        target_width = 1080
+        
+        # 1. Prepare Main Content (Center)
+        # We want to keep original aspect ratio of the video, scale it to fit width 1080
+        clip_aspect = clip.w / clip.h
+        
+        # Standard valid vertical clip logic:
+        # Resize original clip to width 1080
+        video_main = clip.resize(width=target_width)
+        
+        # If it's too tall (unlikely for horizontal source), crop it.
+        # If it's too short (horizontal source), we center it on a blurred background.
+        
+        # 1. Background (Blurred and Zoomed)
+        # Resize to cover height 1920
+        bg_clip = clip.resize(height=target_height)
+        bg_clip = bg_clip.crop(x1=bg_clip.w/2 - target_width/2, width=target_width, height=target_height)
+        bg_clip = bg_clip.fl_image(lambda image: cv2.GaussianBlur(image, (101, 101), 0))
+        
+        # 2. Main Video (Centered)
+        # video_main is already width=1080.
+        # Position it in the center
+        video_main = video_main.set_position("center")
+        
+        # Combine
+        final = CompositeVideoClip([bg_clip, video_main], size=(target_width, target_height))
+        
+        # Render
+        my_logger = MyBarLogger(progress_callback) if progress_callback else None
+        
+        final.write_videofile(
+            output_path, 
+            codec="libx264", 
+            audio_codec="aac", 
+            threads=4, 
+            preset="medium",
+            fps=24,
+            logger=my_logger
+        )
+        
+        return output_path
+        
     except Exception as e:
         print(f"Error processing clip: {e}")
         return None
