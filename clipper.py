@@ -253,7 +253,7 @@ def analyze_transcript_with_groq(transcript_obj, n_clips=3, logger=None):
     
     **CRITICAL INSTRUCTION**: 
     - The output **MUST BE IN BAHASA INDONESIA**.
-    - The Titles must be **CLICKBAIT** and extremely viral (e.g., "TERNYATA...", "JANGAN TIDUR SEBELUM...", "RAHASIA TERBONGKAR...").
+    - The Titles must be **CLICKBAIT** and extremely viral.
     
     For each segment, also generate:
     1. A catchy **Viral Title** (Clickbait, Bahasa Indonesia).
@@ -367,6 +367,14 @@ def save_vertical_clip(video_path, clip_data, output_path, progress_callback=Non
         
         if t_start is None: t_start = 0.0
         if t_end is None: t_end = full_clip.duration
+        
+        # Clamp timestamps to video duration to prevent out-of-bounds errors
+        t_start = max(0.0, min(t_start, full_clip.duration))
+        t_end = max(t_start, min(t_end, full_clip.duration))
+        
+        # Ensure we have at least 0.1 seconds of content
+        if t_end - t_start < 0.1:
+            t_end = min(t_start + 0.1, full_clip.duration)
         
         clip = full_clip.subclip(t_start, t_end)
         
