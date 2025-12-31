@@ -144,13 +144,13 @@ with st.sidebar:
             else:
                 st.warning("❌ Not Logged In")
                 
-            with st.expander("❓ How to get cookies.txt?"):
-                st.markdown("""
-                1. Install **"Get cookies.txt LOCALLY"** (Chrome/Firefox).
-                2. Login to YouTube.
-                3. Click extension > "Export".
-                4. Upload the file here.
-                """)
+        with st.expander("❓ How to get cookies.txt?"):
+            st.markdown("""
+            1. Install **"Get cookies.txt LOCALLY"** (Chrome/Firefox).
+            2. Login to YouTube.
+            3. Click extension > "Export".
+            4. Upload the file here.
+            """)
         # ---------------------------------------
 
         st.divider()
