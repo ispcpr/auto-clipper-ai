@@ -152,7 +152,8 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
             video_filename = ydl.prepare_filename(info_dict)
             abs_path = os.path.abspath(video_filename)
             log_msg(logger, f"Video downloaded to: {abs_path}")
-            return abs_path
+            title = info_dict.get('title', 'Untitled')
+            return abs_path, title
     except Exception as e:
         err_str = str(e)
         if "cookie" in err_str.lower() or "locked" in err_str.lower() or "permission" in err_str.lower():
@@ -167,7 +168,7 @@ def download_video(youtube_url, output_dir="downloads", progress_callback=None, 
                 potential_file = ydl.prepare_filename(info)
                 if os.path.exists(potential_file):
                     log_msg(logger, f"WinError workaround: Found {potential_file}. Proceeding.")
-                    return os.path.abspath(potential_file)
+                    return os.path.abspath(potential_file), info.get('title', 'Untitled')
         except:
              pass
         # Re-raise to show user the specific error

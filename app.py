@@ -239,7 +239,7 @@ if mode == "Analisis Baru":
 
                     try:
                         # Clean call to download_video (no use_oauth)
-                        video_path = clipper.download_video(
+                        video_path, video_title = clipper.download_video(
                             youtube_url, 
                             DOWNLOAD_DIR, 
                             progress_callback=update_progress,
@@ -254,8 +254,9 @@ if mode == "Analisis Baru":
                         status.update(label="Download Failed", state="error")
                         st.stop()
                     
-                    status.update(label="Download Complete!", state="complete", expanded=False)
+                    status.update(label=f"Download Complete! ({video_title})", state="complete", expanded=False)
                     st.session_state['video_path'] = video_path
+                    st.session_state['video_title'] = video_title
 
                 # 2. Analyze
                 with st.status("🧠 Phase 2: AI Analysis...", expanded=True) as status:
@@ -366,6 +367,12 @@ if mode == "Analisis Baru":
                         st.video(clip['file_path'])
                         st.write(f"**{clip['title']}**")
                         st.caption(clip.get('viral_detail', clip['reason']))
+                        
+                        # Copy for Upload Feature
+                        hashtags_str = " ".join([f"#{t.replace('#','')}" for t in clip['hashtags']])
+                        copy_text = f"{clip['title']}\n{clip.get('viral_detail', clip['reason'])}\n{hashtags_str}"
+                        st.code(copy_text, language="text")
+                        
                         # Lazy Download for Analysis Results
                         dl_key = f"ready_dl_new_{i}"
                         if dl_key not in st.session_state:
@@ -436,6 +443,10 @@ elif mode == "Riwayat":
                         tags = [t.replace('#', '') for t in clip['hashtags']]
                         display_tags = " ".join([f"#{t}" for t in tags])
                         st.caption(f"Tags: {display_tags}")
+                        
+                        # Copy for Upload Feature
+                        copy_text = f"{clip['title']}\n{detail}\n{display_tags}"
+                        st.code(copy_text, language="text")
                         
                         c_vid, c_act = st.columns([3, 1])
                         with c_vid:
